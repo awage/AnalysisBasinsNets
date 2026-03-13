@@ -1,4 +1,4 @@
-using OrdinaryDiffEq
+using OrdinaryDiffEqVerner
 using Attractors
 
 
@@ -16,7 +16,7 @@ function _get_basins_duf(d)
     ds   = CoupledODEs(duffing, rand(2), [0.15, F, ω]; diffeq=(reltol=1e-8, alg=Vern9()))
     smap = StroboscopicMap(ds, 2π/ω)
     xg   = yg = range(-3, 3, length=res)
-    mapper = AttractorsViaRecurrences(smap, (xg, yg))
+    mapper = AttractorsViaRecurrences(smap, (xg, yg); consecutive_recurrences = 200)
     basins, attractors = basins_of_attraction(mapper, (xg, yg))
     return @strdict basins
 end

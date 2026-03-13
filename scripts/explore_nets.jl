@@ -1,5 +1,5 @@
 using DrWatson
-@quickactivate "Analize_basins_nets"
+@quickactivate 
 using Statistics
 using Graphs
 
