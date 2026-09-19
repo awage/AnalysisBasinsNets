@@ -1,6 +1,7 @@
+using DrWatson
+@quickactivate
 using OrdinaryDiffEqVerner
 using Attractors
-
 
 # ── Duffing oscillator ────────────────────────────────────────────────────────
 
