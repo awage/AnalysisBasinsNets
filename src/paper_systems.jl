@@ -11,44 +11,8 @@
 using DrWatson
 using OrdinaryDiffEqVerner
 using Attractors
-using LinearAlgebra
 using Random
 using Statistics
-
-include(srcdir("basins_fun.jl"))   # magnetic_pendulum
-
-# ── Sierpiński benchmarks ─────────────────────────────────────────────────────
-
-# Level-m triangle on an N = 2^m grid (Pascal's triangle mod 2). Filled cells
-# are colored 1–3 by the last binary digit of their address, so that touching
-# sub-triangles have different colors; the holes and background are label 4.
-function sierpinski_triangle(m)
-    N = 2^m
-    B = fill(4, N, N)
-    for x in 0:N-1, y in 0:N-1
-        if (x & y) == x
-            B[x+1, y+1] = 1 + (x & 1) + (y & 1)
-        end
-    end
-    return B
-end
-
-# Level-m carpet on an N = 3^m grid: filled = 1, holes = 2.
-function sierpinski_carpet(m)
-    N = 3^m
-    B = ones(Int, N, N)
-    for i in 0:N-1, j in 0:N-1
-        a, b = i, j
-        while a > 0 || b > 0
-            if a % 3 == 1 && b % 3 == 1
-                B[i+1, j+1] = 2
-                break
-            end
-            a ÷= 3; b ÷= 3
-        end
-    end
-    return B
-end
 
 # ── Generic machinery ─────────────────────────────────────────────────────────
 
@@ -209,6 +173,46 @@ function get_basins_duffing(F, N)
 end
 
 # ── Magnetic pendulum, three magnets on the unit circle ──────────────────────
+# 4D system: state = [x, y, vx, vy], N magnets placed on the unit circle
+# Parameters: γs — per-magnet strengths, d — height above magnets,
+#             α — damping, ω — natural (spring) frequency
+
+struct MagneticPendulum
+    magnets::Vector{SVector{2,Float64}}
+end
+
+struct MagneticPendulumParams
+    γs::Vector{Float64}
+    d::Float64
+    α::Float64
+    ω::Float64
+end
+
+@inline function (mp::MagneticPendulum)(du, u, p, t)
+    γs, d, α, ω = p.γs, p.d, p.α, p.ω
+    x, y, vx, vy = u
+    Fx = -ω^2 * x
+    Fy = -ω^2 * y
+    for (i, mag) in enumerate(mp.magnets)
+        mx, my = mag
+        r3 = ((x - mx)^2 + (y - my)^2 + d^2)^(3/2)
+        Fx += γs[i] * (mx - x) / r3
+        Fy += γs[i] * (my - y) / r3
+    end
+    du[1] = vx
+    du[2] = vy
+    du[3] = -α * vx + Fx
+    du[4] = -α * vy + Fy
+    return
+end
+
+function magnetic_pendulum(u = [sincos(0.12553*2π)..., 0.0, 0.0];
+        γ = 1.0, d = 0.3, α = 0.2, ω = 0.5, N = 3,
+        γs = fill(γ, N), diffeq = NamedTuple())
+    m = MagneticPendulum([SVector(cos(2π*i/N), sin(2π*i/N)) for i in 1:N])
+    p = MagneticPendulumParams(γs, d, α, ω)
+    return CoupledODEs(m, u, p; diffeq)
+end
 
 const MAG_PARAMS = (γ = 1.0, d = 0.3, α = 0.05, ω = 0.5, N = 3)
 const MAG_BOX = (-2.0, 2.0)
@@ -287,6 +291,48 @@ function get_basins_feudel(N)
             AttractorsViaProximity(deepcopy(ds), att; ε = FEUDEL_PROX_ε,
                                    consecutive_lost_steps = 100_000)
         end
+        @strdict basins
+    end
+    return data["basins"]
+end
+
+# ── Relaxed Newton family of Saupe (1987) ────────────────────────────────────
+# N_h(z) = z - h p(z)/p'(z), p(z) = z^3 + (λ-1)z - λ, on [-2, 2]^2. SAUPE_DF is
+# the box-counting dimension of the Julia set from Saupe's Table IV.
+
+const SAUPE_λ = 1.1 - 0.1im
+const SAUPE_ROOTS = let s = sqrt(1 - 4SAUPE_λ); (complex(1.0), (-1 + s) / 2, (-1 - s) / 2) end
+const SAUPE_DF = Dict(0.1 => 1.242, 0.2 => 1.254, 0.3 => 1.290, 0.4 => 1.309, 0.5 => 1.326,
+                      0.6 => 1.345, 0.7 => 1.360, 0.8 => 1.369, 0.9 => 1.401, 1.0 => 1.424,
+                      1.1 => 1.443, 1.2 => 1.464, 1.3 => 1.485, 1.4 => 1.512, 1.5 => 1.536,
+                      1.6 => 1.565, 1.7 => 1.603, 1.8 => 1.638, 1.9 => 1.678)
+
+function relaxed_newton_root(z, h; maxit = 20_000)
+    λ = SAUPE_λ
+    for _ in 1:maxit
+        dp = 3z^2 + (λ - 1)
+        abs2(dp) < 1e-30 && return 0
+        z -= h * (z^3 + (λ - 1) * z - λ) / dp
+        for k in 1:3
+            abs2(z - SAUPE_ROOTS[k]) < 1e-12 && return k
+        end
+    end
+    return 0
+end
+
+function relaxed_newton_basins(h, N; L = 2.0)
+    r = range(-L, L, length = N); B = zeros(Int, N, N)
+    Threads.@threads for j in 1:N
+        for i in 1:N
+            B[i, j] = relaxed_newton_root(complex(r[i], r[j]), h)
+        end
+    end
+    return B
+end
+
+function get_basins_saupe(h, N)
+    data = cached("saupe", Dict(:h => h, :N => N)) do c
+        basins = relaxed_newton_basins(c[:h], c[:N])
         @strdict basins
     end
     return data["basins"]

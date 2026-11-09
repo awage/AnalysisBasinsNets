@@ -1,16 +1,17 @@
+# Basin adjacency graph (BAG) of a basin diagram and the statistics used in the
+# paper (../draft/main.tex): vertex count, degrees, Wada averages and the
+# single-grid Korčák exponent.
 using Graphs
 using Statistics
 
-# Return CartesianIndices of all neighbors of `box` within `dims` bounds
+# CartesianIndices of the 8-neighbourhood of `box` (itself included) within `dims`.
 function neighbor_indices(box, dims)
     CartesianIndices(ntuple(i -> max(1, box[i]-1):min(dims[i], box[i]+1), length(dims)))
 end
 
-function cart_to_lin(k, dims)
-    return k[1] + (k[2]-1)*dims[1]
-end
+cart_to_lin(k, dims) = k[1] + (k[2]-1)*dims[1]
 
-# ── Union-find used to label connected components of the pixel graph ─────────
+# ── Union–find labelling of the 8-connected components ───────────────────────
 
 function uf_find!(parent, i)
     while parent[i] != i
@@ -26,8 +27,7 @@ function uf_union!(parent, i, j)
     ri < rj ? (parent[rj] = ri) : (parent[ri] = rj)
 end
 
-# Label the 8-connected components of equal basin value. Components are
-# numbered 1, 2, ... in order of first appearance (column-major scan).
+# Components are numbered 1, 2, ... in order of first appearance (column-major).
 function label_components(basins)
     dims = size(basins)
     parent = collect(1:length(basins))
@@ -49,80 +49,84 @@ function label_components(basins)
     return lab, length(root_to_lab)
 end
 
-# Build the basin adjacency graph (BAG). Returns the basin value of each
-# component, the BAG and the component-numbered basin.
+"""
+    scan_basins(basins) -> (label, g, lab)
+
+BAG of `basins`: basin label of each component, the graph `g` (edges join
+8-adjacent components, which belong to different basins by construction) and
+the matrix of component indices.
+"""
 function scan_basins(basins)
     dims = size(basins)
     lab, M = label_components(basins)
-
-    basins_values = zeros(M)
+    label = zeros(Int, M)
     for i in eachindex(lab)
-        basins_values[lab[i]] = basins[i]
+        label[lab[i]] = basins[i]
     end
-
-    # Connect adjacent components (they belong to different basins by construction)
-    basins_graph = SimpleGraph(M)
+    g = SimpleGraph(M)
     for box in CartesianIndices(basins)
         a = lab[box]
         for k in neighbor_indices(box, dims)
             b = lab[k]
-            a != b && add_edge!(basins_graph, a, b)
+            a != b && add_edge!(g, a, b)
         end
     end
-
-    return basins_values, basins_graph, Float64.(lab)
+    return label, g, lab
 end
 
-function wada_neighbors(g, v)
-    wd = zeros(length(v))
-    for (k, vtx) in enumerate(g.fadjlist)
-        wd[k] = length(unique(v[vtx]))
-    end
-    return wd
-end
-
-function scan_boundary!(G, basins)
-    dims = size(basins)
-    box_indices = CartesianIndices(basins)
-    for box in box_indices
-        nb = cart_to_lin(box, dims)
-        for k in neighbor_indices(box, dims)
-            n = cart_to_lin(k, dims)
-            if basins[box] != basins[k] && n != nb
-                add_edge!(G, n, nb)
-            end
-        end
-    end
-end
-
-# ── Graph statistics used in the paper ────────────────────────────────────────
+# ── Statistics ───────────────────────────────────────────────────────────────
 
 """
-    bag_stats(basins) -> NamedTuple
+    korcak_exponent(area, npix; amin = 10, amax_frac = 1e-3) -> (K, nthresholds)
 
-Summary statistics of the basin adjacency graph of `basins`:
-number of vertices `nv` and edges `ne`, mean degree `k`, number of
-basins `NA`, and the Wada fraction: the fraction of boundary components
-(components with at least one neighbor) whose neighbors carry all the
-`NA - 1` other basin labels. `w` is the mean Wada neighbor count over the
-boundary components. Pixels with a label ≤ 0 (initial conditions that did
-not converge) are kept as regions of the graph but are not counted as a
-basin; `frac_unclassified` is their fraction.
+Korčák exponent of N(A > a) ~ a^(-K) with the thresholds of Imre et al. (2012),
+a_i = A_i - 1 over the distinct component areas A_i in [amin, amax_frac·npix]
+pixels. 2K is the single-grid counterpart of the vertex-scaling exponent α.
 """
-function bag_stats(basins)
-    v, g, _ = scan_basins(basins)
+function korcak_exponent(area, npix; amin = 10, amax_frac = 1e-3)
+    us = sort(unique(area)); us = us[(us .≥ amin) .& (us .≤ amax_frac * npix)]
+    length(us) < 3 && return NaN, length(us)
+    x = log.(us .- 0.5); y = log.([count(>(u - 1), area) for u in us])
+    return -cov(x, y) / var(x), length(us)
+end
+
+# Number of pixels of each component.
+function component_areas(lab, M)
+    a = zeros(Int, M)
+    for l in lab
+        a[l] += 1
+    end
+    return a
+end
+
+"""
+    bag_stats(basins; korcak = false) -> NamedTuple
+
+Statistics of the BAG of `basins`: number of vertices `nv` and edges `ne`,
+mean and largest degree `k`, `kmax`, number of basins `NA`, Wada fraction
+(share of boundary components, i.e. with at least one neighbour, adjacent to
+all `NA - 1` other basins) and mean basin-neighbour count `w` over the
+boundary components. Pixels with a label ≤ 0 (not classified) are kept as
+regions of the graph but are not a basin. With `korcak = true` the
+single-grid Korčák dimension `twoK` = 2K is also computed.
+"""
+function bag_stats(basins; korcak = false)
+    v, g, lab = scan_basins(basins)
     NA = count(>(0), unique(basins))
     deg = degree(g)
     wd = [length(unique(filter(>(0), v[nbrs]))) for nbrs in g.fadjlist]
     bnd = (deg .> 0) .& (v .> 0)
     nb = count(bnd)
+    twoK = korcak ? 2 * first(korcak_exponent(component_areas(lab, nv(g)), length(basins))) : NaN
     return (
         nv = nv(g),
         ne = ne(g),
         k = mean(deg),
+        kmax = maximum(deg),
         NA = NA,
         wada_frac = nb > 0 ? count(wd[bnd] .== NA - 1) / nb : NaN,
         w = nb > 0 ? mean(wd[bnd]) : NaN,
+        twoK = twoK,
         frac_unclassified = count(<=(0), basins) / length(basins),
     )
 end
@@ -130,7 +134,7 @@ end
 """
     vertex_scaling(Ns, V) -> (α, b, R²)
 
-Least-squares fit of log|V| = b + α log N.
+Least-squares fit of log V = b + α log N.
 """
 function vertex_scaling(Ns, V)
     x = log.(Ns); y = log.(V)

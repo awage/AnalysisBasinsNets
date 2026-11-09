@@ -1,5 +1,5 @@
-# Shared setup for the scripts that reproduce the figures and table of the BAG
-# paper. Figures and the table are written directly into ../draft.
+# Shared setup for the scripts that reproduce the figures and the table of the
+# BAG paper. Figures and the table are written directly into ../draft.
 using DrWatson
 @quickactivate "AnalysisBasinsNets"
 using CairoMakie
@@ -14,58 +14,54 @@ const FIGDIR = joinpath(DRAFTDIR, "figures")
 const TABDIR = joinpath(DRAFTDIR, "tables")
 mkpath(FIGDIR); mkpath(TABDIR)
 
-# Resolutions of the dynamical systems. NS is used for the expensive flows
-# (magnetic pendulum); NS_LARGE extends it where the basins are cheap enough.
-# Only N ≥ NFIT_MIN enters the fits: below it |V| is a few tens of vertices and
-# the local slopes fluctuate wildly.
-const NS = [50, 75, 100, 150, 200, 300, 400, 500]
-const NS_LARGE = vcat(NS, [700, 1000])
-const NFIT_MIN = 100
+fmt(x; d = 3) = (x isa Real && isfinite(x)) ? @sprintf("%.*f", d, x) : "---"
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
 """
-    analyze_system(name, getter, Ns; fit_min = NFIT_MIN, checks = true)
+    analyze_system(name, getter, Ns; merge_test = false)
 
-Compute the BAG statistics of `getter(N)` for every `N` in `Ns` and fit the
-vertex scaling |V| ~ N^α over the resolutions N ≥ `fit_min`. As a reference,
-the box-counting dimension of the boundary is obtained on the same grids from
-the number of boundary pixels, N_b ~ N^d (the pixel size is ∝ 1/N), and the
-uncertainty exponent is α_u = 2 - d. On the finest basin the merging-method
-Wada test is run. Results are saved in data/paper_results/<name>.jld2.
+BAG statistics of `getter(N)` for every `N` in `Ns`, together with the number of
+boundary pixels `nb` (box counting of the boundary with one-pixel boxes) and,
+on the finest grid only, the single-grid Korčák dimension 2K. With
+`merge_test = true` the merging-method Wada test is run on the finest grid.
+Exponents are fitted afterwards with `exponents`. Results are saved in
+data/paper_results/<name>.jld2.
 """
-function analyze_system(name, getter, Ns; fit_min = NFIT_MIN, checks = true)
+function analyze_system(name, getter, Ns; merge_test = false)
     stats = map(Ns) do N
         B = getter(N)
-        s = bag_stats(B)
-        nb = boundary_pixels(B)
-        @printf("%-22s N=%5d  |V|=%7d  <k>=%.3f  NA=%d  wada=%.3f  Nb=%8d  unclassified=%.2e\n",
-                name, N, s.nv, s.k, s.NA, s.wada_frac, nb, s.frac_unclassified)
-        merge(s, (nb = nb,))
+        s = merge(bag_stats(B; korcak = N == last(Ns)), (nb = boundary_pixels(B),))
+        @printf("%-14s N=%5d  |V|=%7d  <k>=%.2f  kmax=%6d  wada=%.3f  w̄=%.3f  Nb/N²=%.3f  unclassified=%.1e\n",
+                name, N, s.nv, s.k, s.kmax, s.wada_frac, s.w, s.nb / N^2, s.frac_unclassified)
+        s
     end
-    fit = findall(≥(fit_min), Ns)
-    V = [s.nv for s in stats]
-    α, b, R2 = vertex_scaling(Ns[fit], V[fit])
-    @printf("%-22s α = %.3f  (R² = %.4f, N ≥ %d)\n", name, α, R2, fit_min)
-    res = Dict{String,Any}("name" => name, "Ns" => collect(Ns), "stats" => stats,
-                           "fit" => fit, "alpha" => α, "b" => b, "R2" => R2)
-    Nb = [s.nb for s in stats]
-    if all(>(0), Nb[fit])
-        d, _, R2d = vertex_scaling(Ns[fit], Nb[fit])
-        res["d_box"], res["alpha_u"], res["R2_box"] = d, 2 - d, R2d
-    else   # a single basin has no boundary
-        res["d_box"], res["alpha_u"], res["R2_box"] = NaN, NaN, NaN
-    end
-    @printf("%-22s d (boundary box counting) = %.3f  (α_u = %.3f)\n", name, res["d_box"], res["alpha_u"])
-    if checks && stats[end].NA ≥ 3
+    res = Dict{String,Any}("name" => name, "Ns" => collect(Ns), "stats" => stats)
+    if merge_test
         res["wada_merge"] = wada_merge(getter(last(Ns)))
-        @printf("%-22s merging-method Wada test = %s\n", name, res["wada_merge"])
+        @printf("%-14s merging-method Wada test = %.4f\n", name, res["wada_merge"])
     end
     wsave(datadir("paper_results", "$(name).jld2"), res)
     return res
 end
 
-# Number of pixels with an 8-neighbor in a different basin. Counting them at
+"""
+    exponents(res; Nmin = 0) -> NamedTuple
+
+Exponents fitted over the grids N ≥ `Nmin` of an `analyze_system` result:
+vertex scaling |V| ~ N^α (with intercept `b` and `R2`), boundary pixels
+N_b ~ N^d_b, largest degree kmax ~ |V|^x.
+"""
+function exponents(res; Nmin = 0)
+    Ns = res["Ns"]; fit = findall(≥(Nmin), Ns); s = res["stats"][fit]
+    V = [x.nv for x in s]
+    α, b, R2 = vertex_scaling(Ns[fit], V)
+    d_b, = vertex_scaling(Ns[fit], [x.nb for x in s])
+    x_kmax, = vertex_scaling(V, [x.kmax for x in s])
+    (; α, b, R2, d_b, x_kmax, fit, Ns = Ns[fit], stats = s)
+end
+
+# Number of pixels with an 8-neighbour in a different basin. Counting them at
 # resolution N is box counting of the boundary with boxes of one pixel.
 function boundary_pixels(B)
     B = fill_unclassified(B)
@@ -84,8 +80,9 @@ function wada_merge(B; r = 1)
     return test_wada_merge(map(b -> lut[b], B), r)
 end
 
-# The independent checks only concern the basins of the attractors, so
-# unclassified pixels (label ≤ 0) take the label of a classified neighbor.
+# The boundary-pixel count and the merging test only concern the basins of the
+# attractors, so unclassified pixels (label ≤ 0) take the label of a
+# classified neighbour.
 function fill_unclassified(B)
     B = copy(B)
     while any(<=(0), B)
@@ -103,8 +100,6 @@ function fill_unclassified(B)
     return B
 end
 
-load_results(name) = wload(datadir("paper_results", "$(name).jld2"))
-
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 const BASIN_COLORS = Dict(
@@ -115,41 +110,5 @@ const UNCLASSIFIED_COLOR = colorant"gray70"
 basin_image(B; colors = BASIN_COLORS) =
     [get(colors, b, UNCLASSIFIED_COLOR) for b in B]
 
-function set_theme_paper!()
-    set_theme!(Theme(fontsize = 11, figure_padding = 4,
-                     Axis = (xgridvisible = false, ygridvisible = false)))
-end
-
-function plot_basins(file, xs, ys, B; xlabel = L"x", ylabel = L"y", title = "",
-                     colors = BASIN_COLORS, size = (300, 280), extra! = ax -> nothing)
-    fig = Figure(; size)
-    ax = Axis(fig[1, 1]; xlabel, ylabel, title, aspect = DataAspect())
-    image!(ax, first(xs)..last(xs), first(ys)..last(ys), basin_image(B; colors);
-           interpolate = false)
-    extra!(ax)
-    limits!(ax, first(xs), last(xs), first(ys), last(ys))
-    save(joinpath(FIGDIR, file), fig; pt_per_unit = 1)
-    return fig
-end
-
-function plot_scaling(file, series; title = "", size = (320, 280), legend = :lt)
-    fig = Figure(; size)
-    ax = Axis(fig[1, 1]; xlabel = L"\log N", ylabel = L"\log |V|", title)
-    for (k, r) in enumerate(series)
-        x = log.(r["Ns"]); y = log.([s.nv for s in r["stats"]])
-        fit = get(r, "fit", eachindex(x))
-        out = setdiff(eachindex(x), fit)
-        c = Makie.wong_colors()[k]
-        label = haskey(r, "label") ? @sprintf("%s, α = %.3f", r["label"], r["alpha"]) :
-                                     @sprintf("α = %.3f", r["alpha"])
-        scatter!(ax, x[fit], y[fit]; color = c, label)
-        isempty(out) || scatter!(ax, x[out], y[out]; color = :white, strokecolor = c,
-                                 strokewidth = 1)
-        lines!(ax, x[fit], r["b"] .+ r["alpha"] .* x[fit]; color = c, label)
-    end
-    axislegend(ax; position = legend, framevisible = false, merge = true)
-    save(joinpath(FIGDIR, file), fig; pt_per_unit = 1)
-    return fig
-end
-
-set_theme_paper!()
+set_theme!(Theme(fontsize = 11, figure_padding = 4,
+                 Axis = (xgridvisible = false, ygridvisible = false)))

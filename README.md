@@ -27,29 +27,32 @@ using DrWatson
 ```
 which auto-activate the project and enable local path handling from DrWatson.
 
-## Reproducing the figures of the BAG paper
+## Reproducing the figures and the table of the BAG paper
 
-The draft lives in `../draft` (LaTeX). All its figures and Table 1 are produced by
+The draft lives in `../draft` (LaTeX, `main.tex`). Its figures and table are produced by
 
 ```
 julia -t auto --project=. scripts/make_paper.jl
 ```
 
-which runs, in order, `scripts/fig_sierpinski.jl`, `fig_newton.jl`, `fig_duffing.jl`,
-`fig_magnetic.jl`, `fig_feudel.jl` and `table_summary.jl`; each script can also be run
-on its own. Figures are written to `../draft/figures` and the table to
-`../draft/tables/table1.tex`.
+which runs
+
+* `scripts/fig_newton.jl` → `figures/newton_basins.pdf`, `figures/newton_scaling.pdf`
+  (Fig. 2), plus the Newton fit over N ≥ 100 and the grid-free uncertainty exponent
+  quoted in the text;
+* `scripts/paper_korcak.jl` → `tables/korcak.tex` (Table I) and `figures/korcak.pdf`
+  (Fig. 3, relaxed Newton family against Saupe's d_F), plus the other numbers quoted in
+  the Results section (boundary-pixel fraction, mean and largest degree, w̄ ranges).
+
+Fig. 1 (Sierpiński triangle graph) is drawn with TikZ in `main.tex`.
 
 * `src/paper_systems.jl` defines the systems with the parameters of the paper. The
   attractors are located once, then every resolution is classified with a threaded
   `AttractorsViaProximity` mapper, so labels are consistent across resolutions.
   Basins are cached in `data/paper_basins` (delete a file to recompute it).
 * `src/analyze_nets.jl` builds the basin adjacency graph (8-connectivity, union–find
-  labelling) and its statistics (`bag_stats`, `vertex_scaling`).
-* Independent checks, run on the finest basin of each system: box-counting dimension of
-  the boundary from the uncertainty exponent (`uncertainty_exponent`) and the merging
-  method Wada test (`test_wada_merge`). Per-system results are saved in
-  `data/paper_results`.
+  labelling) and its statistics (`bag_stats`, `korcak_exponent`, `vertex_scaling`).
+* Per-system results are saved in `data/paper_results`.
 
-A full run from scratch takes of the order of half an hour on 8 threads; the magnetic
+A full run from scratch takes of the order of an hour on 8 threads; the magnetic
 pendulum dominates.
