@@ -9,8 +9,8 @@ using Statistics
 include(srcdir("analyze_nets.jl"))
 include(srcdir("paper_systems.jl"))
 
-const DRAFTDIR = joinpath(dirname(projectdir()), "draft")
-const FIGDIR = joinpath(DRAFTDIR, "figures")
+const DRAFTDIR = projectdir()
+const FIGDIR = joinpath(DRAFTDIR, "plots")
 const TABDIR = joinpath(DRAFTDIR, "tables")
 mkpath(FIGDIR); mkpath(TABDIR)
 

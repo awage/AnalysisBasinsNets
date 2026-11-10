@@ -1,4 +1,3 @@
-# Reproduce the figures and the table of the BAG paper (../draft/main.tex).
 # Run with threads:  julia -t auto --project=. scripts/make_paper.jl
 # Basins are cached in data/paper_basins, so re-runs only redo the analysis.
 for s in ("fig_newton.jl", "paper_korcak.jl")
